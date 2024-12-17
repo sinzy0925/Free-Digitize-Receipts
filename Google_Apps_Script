@@ -1,0 +1,618 @@
+// APIキーなどの設定
+//let で定義してグローバル変数にする
+let globalENVArray ;
+let SPLEADSHEET_URL = ""; // ENVシートのC2　スプレッドシートURLを設定してください
+let FOLDER_ID       = ""; // ENVシートのC3　GoogleドライブのフォルダID
+let DIFY_API_KEY    = ""; // ENVシートのC4　Dify APIキーを設定してください
+let DIFY_USER       = ""; // ENVシートのC5　Dify ユーザーIDを設定してください
+
+let SPREADSHEET_ID  = ""; // スプレッドシートID スプレッドシートURLから取得
+
+const DIFY_API_URL = "https://api.dify.ai/v1";
+const SHEET_NAME = "result"; // シート名を設定してください
+
+
+
+function getEnvDataArray() {
+  // スプレッドシートを取得
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // ワークシート「ENV」を取得
+  const envSheet = ss.getSheetByName("ENV");
+
+  // ワークシートが存在しない場合はエラーを返す
+  if (!envSheet) {
+    Logger.log("ワークシート 'ENV' が見つかりません。");
+    return null;
+  }
+
+  // セルC2からC6の範囲を取得
+  const rangeData = envSheet.getRange("C2:C5");
+
+  // 範囲のデータを配列として取得
+  globalENVArray = rangeData.getValues().flatMap(row => row);
+
+  SPLEADSHEET_URL = globalENVArray[0]; // ENVシートのC2　スプレッドシートURLを設定してください
+  
+  // C3セルの値をチェックし、URL形式の場合はフォルダIDを抽出
+  let folderUrlOrId = globalENVArray[1]; // ENVシートのC3　GoogleドライブのフォルダURLまたはID
+  if (folderUrlOrId && folderUrlOrId.startsWith("https://drive.google.com/drive/folders/")) {
+    FOLDER_ID = extractFolderIdFromUrl(folderUrlOrId);
+  } else {
+    FOLDER_ID = folderUrlOrId; // URLでない場合はそのままフォルダIDとして使用
+  }
+  
+  DIFY_API_KEY   = globalENVArray[2]; // ENVシートのC4　Dify APIキーを設定してください
+  DIFY_USER      = globalENVArray[3]; // ENVシートのC5　Dify ユーザーIDを設定してください
+
+  SPREADSHEET_ID = extractSpreadsheetIdFromUrl(SPLEADSHEET_URL);
+
+  // 取得した配列をログに出力（必要に応じて削除）
+  Logger.log("C2からC6の値 (配列): " + JSON.stringify(globalENVArray));
+  Logger.log("抽出されたフォルダID: " + FOLDER_ID);
+  Logger.log("抽出されたスプレッドシートID: " + SPREADSHEET_ID);
+
+  // 取得した配列を返す
+  //return dataArray;
+}
+
+
+function extractSpreadsheetIdFromUrl(url) {
+  if (url && url.startsWith("https://docs.google.com/spreadsheets/d/")) {
+    const regex = /https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
+    const match = url.match(regex);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+  Logger.log("スプレッドシートURLからIDを抽出できませんでした。URL:" + url);
+  return "";
+}
+
+function extractFolderIdFromUrl(url) {
+  try {
+    // URLからフォルダIDを抽出
+    const match = url.match(/folders\/([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) {
+      return match[1];
+    } else {
+      Logger.log("URLからフォルダIDを抽出できませんでした: " + url);
+      return null;
+    }
+  } catch (e) {
+    Logger.log("URLの解析中にエラーが発生しました: " + e);
+    return null;
+  }
+}
+
+function updateImportRangeURL() {
+  // 環境変数を取得
+  getEnvDataArray();
+
+  // スプレッドシートを取得
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // 「result」シートを取得
+  const resultSheet = ss.getSheetByName("result");
+
+  // もし「result」シートが存在しない場合はエラーを返す
+  if (!resultSheet) {
+    Logger.log("シート 'result' が見つかりません。");
+    return;
+  }
+
+  // セルA2を取得
+  const cellA2 = resultSheet.getRange("A2");
+
+  // セルA2の数式を取得
+  let formula = cellA2.getFormula();
+
+  // もしA2に数式が入っていない場合は処理を終了
+  if (!formula) {
+    Logger.log("セルA2に数式がありません。");
+    return;
+  }
+
+    // 現在のURLを取得するための正規表現
+  const urlRegex = /"https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)\/edit[\?#].*?"/;
+  const match = formula.match(urlRegex);
+
+  if (!match) {
+      Logger.log("セルA2の数式にURLが見つかりませんでした。");
+      return;
+  }
+
+  const oldURL = match[0];
+
+
+  // 新しいURLを生成
+  const newURL = `"${SPLEADSHEET_URL}"`;
+    // 数式を更新
+   const newFormula = formula.replace(oldURL, newURL);
+
+  // 数式をセルに設定
+  cellA2.setFormula(newFormula);
+
+  Logger.log("セルA2のURLを更新しました : " + newFormula);
+}
+
+
+function getFileUrlsAndIdsToSpreadsheet() {
+  // forderID取得
+  getEnvDataArray();
+  
+  // ドライブフォルダのID
+  const forderID = FOLDER_ID;
+  // スプレッドシートのID
+  const spreadsheetId = SPREADSHEET_ID;
+  // ワークシート名
+  const sheetName = "urls";
+
+  // ドライブフォルダを取得
+  const folder = DriveApp.getFolderById(forderID);
+  // フォルダ内のすべてのファイルを取得
+  const files = folder.getFiles();
+
+
+
+  // スプレッドシートを取得
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  // ワークシートを取得
+  const sheet = ss.getSheetByName(sheetName);
+
+  // 既存のデータをクリア (5行目以降)
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 4) {
+    sheet.getRange(5, 1, lastRow - 4, sheet.getLastColumn()).clearContent();
+  }
+
+
+  // ドライブID、URL、拡張子を格納する配列
+  const fileData = [];
+  while (files.hasNext()) {
+    const file = files.next();
+    const fileUrl = file.getUrl();
+    const fileId = file.getId();
+    const fileName = file.getName();
+
+    // ファイル名から拡張子を取得
+    const fileExtension = fileName.slice((fileName.lastIndexOf(".") - 1 >>> 0) + 2);
+
+    fileData.push([fileId, fileUrl, fileExtension,fileName]); // ドライブID, URL, 拡張子を配列に追加
+  }
+
+  // ファイル名でソート
+  fileData.sort((a, b) => {
+    return a[3].localeCompare(b[3]); // ファイル名(インデックス3)で比較
+  });
+  
+  // ドライブID、URL、拡張子を書き込む
+  if (fileData.length > 0) {
+    sheet.getRange(5, 1, fileData.length, 4).setValues(fileData);
+  } else {
+    Logger.log("指定されたフォルダにファイルが見つかりませんでした。");
+  }
+}
+
+
+
+function uploadFileFromGoogleDrive(fileId, fileType) {
+  try {
+    // Google Drive からファイルを取得
+    let file;
+    try {
+      file = DriveApp.getFileById(fileId);
+    } catch (e) {
+      console.error(`ファイルID ${fileId} の取得に失敗しました: ${e}`);
+      return null;
+    }
+    const blob = file.getBlob();
+    const fileName = file.getName();
+    const mimeType = file.getMimeType();
+
+    // Dify API にファイルをアップロード
+    const uploadUrl = `${DIFY_API_URL}/files/upload`;
+    const headers = {
+      "Authorization": `Bearer ${DIFY_API_KEY}`,
+    };
+    const formData = {
+      "user": DIFY_USER,
+      "type": fileType,
+      "file": blob,
+    };
+    const options = {
+      "method": "post",
+      "headers": headers,
+      "payload": formData,
+      "muteHttpExceptions": true,
+    };
+    const response = UrlFetchApp.fetch(uploadUrl, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+
+    if (responseCode === 201) {
+      //console.log("ファイルが正常にアップロードされました");
+      const responseJson = JSON.parse(responseText);
+      return responseJson.id;
+    } else {
+      console.error(`ファイルのアップロードに失敗しました。ステータス コード: ${responseCode}`);
+      console.error(`レスポンス内容: ${responseText}`);
+      return null;
+    }
+  } catch (e) {
+    console.error(`エラーが発生しました: ${e}`);
+    return null;
+  }
+}
+
+function getWorkflowParameters() {
+  try {
+    const parametersUrl = `${DIFY_API_URL}/parameters?user=${DIFY_USER}`;
+    const headers = {
+      "Authorization": `Bearer ${DIFY_API_KEY}`,
+    };
+    const options = {
+      "method": "get",
+      "headers": headers,
+      "muteHttpExceptions": true,
+    };
+    const response = UrlFetchApp.fetch(parametersUrl, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+
+    if (responseCode === 200) {
+      return JSON.parse(responseText);
+    } else {
+      console.error(`パラメータ情報の取得に失敗しました。ステータス コード: ${responseCode}`);
+      console.error(`レスポンス内容: ${responseText}`);
+      return null;
+    }
+  } catch (e) {
+    console.error(`エラーが発生しました: ${e}`);
+    return null;
+  }
+}
+
+function runWorkflow(fileId, parameters, documentType) {
+  try {
+    const workflowUrl = `${DIFY_API_URL}/workflows/run`;
+    const headers = {
+      "Authorization": `Bearer ${DIFY_API_KEY}`,
+      "Content-Type": "application/json",
+    };
+
+    let inputs = {};
+    if (parameters && parameters.user_input_form) {
+      parameters.user_input_form.forEach(item => {
+        if (item.paragraph) {
+          inputs[item.paragraph.variable] = "input";
+        } else if (item["text-input"]) {
+          inputs[item["text-input"].variable] = "input";
+        } else if (item.select) {
+          inputs[item.select.variable] = item.select.default || "";
+        }
+      });
+    }
+
+    inputs["input"] = {
+      "transfer_method": "local_file",
+      "upload_file_id": fileId,
+      "type": documentType,
+    };
+
+    const data = {
+      "inputs": inputs,
+      "response_mode": "blocking",
+      "user": DIFY_USER,
+    };
+
+    const options = {
+      "method": "post",
+      "headers": headers,
+      "payload": JSON.stringify(data),
+      "muteHttpExceptions": true,
+    };
+    const response = UrlFetchApp.fetch(workflowUrl, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+
+    if (responseCode === 200) {
+      //console.log("ワークフローが正常に実行されました");
+      return JSON.parse(responseText);
+    } else {
+      console.error(`ワークフローの実行がステータス コードで失敗しました: ${responseCode}`);
+      console.error(`レスポンス内容: ${responseText}`);
+      return { "status": "error", "message": `Failed to execute workflow, status code: ${responseCode}` };
+    }
+  } catch (e) {
+    console.error(`エラーが発生しました: ${e}`);
+    return { "status": "error", "message": String(e) };
+  }
+}
+
+
+
+
+
+
+
+/**
+ * スプレッドシートのresultシートの5行目以降をクリアする
+ */
+function clearResultSheet() {
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName('result');
+    if (!sheet) {
+      Logger.log(`Error: Sheet "result" not found.`);
+      return;
+    }
+
+    sheet.getRange('D3').clearContent();
+
+    let RESULT_START_ROW = 5;
+    const lastRow = sheet.getLastRow();
+    if (lastRow >= RESULT_START_ROW) {
+      sheet.getRange(RESULT_START_ROW, 1, lastRow - RESULT_START_ROW + 1, sheet.getLastColumn()).clearContent();
+      Logger.log(`Info: Cleared result sheet from row ${RESULT_START_ROW}.`);
+    } else {
+      Logger.log(`Info: No data to clear in result sheet from row ${RESULT_START_ROW}.`);
+    }
+  } catch (e) {
+    Logger.log(`Error in clearResultSheet: ${e}`);
+  }
+}
+
+
+function getFileIdAndUrls() {
+  // スプレッドシートのIDを指定
+  const spreadsheetId = SPREADSHEET_ID; // スプレッドシートのURLから取得
+  
+  // シート名指定
+  const sheetName = "urls";
+  
+  // スプレッドシートオブジェクトを取得
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  
+  // シートオブジェクトを取得
+  const sheet = ss.getSheetByName(sheetName);
+
+  // データ範囲を取得（A列とB列）
+  const range = sheet.getRange("A5:D" + sheet.getLastRow());
+  
+  // 値を取得
+  const values = range.getValues();
+  
+  // 結果を格納する配列
+  const result = [];
+  
+  // fileIdを格納する配列
+  const fileIds = [];
+
+  // URLを格納する配列
+  const urls = [];
+
+  const fileExtension = [];
+
+  const fileName = [] ;
+
+  // 各行を処理
+  for (let i = 0; i < values.length; i++) {
+    // A列の値をfileIds配列に格納
+    fileIds.push(values[i][0]);
+    // B列の値をurls配列に格納
+    urls.push(values[i][1]);
+    // C列の値をfileExtension配列に格納
+    fileExtension.push(values[i][2]);
+    // D列の値をfileName配列に格納
+    fileName.push(values[i][3])
+  }
+
+  // 結果配列にfileIdsとurls配列を格納
+    result.push(fileIds);
+    result.push(urls);
+    result.push(fileExtension);
+    result.push(fileName);
+
+  // 取得結果をログに出力（必要に応じて削除）
+  //Logger.log(result);
+  
+  return result;
+}
+
+
+function writeToSpreadsheet(data,fileId,url,fileName) {
+  let values 
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(SHEET_NAME);
+    const lastRow = sheet.getLastRow();
+    const nextRow = lastRow + 1;
+
+    try{
+      let err = data["会社名"];
+      if(err != 'エラー'){
+        if(typeof data === 'string'){
+          err = data
+        }else{
+          err = ''
+        }
+      }
+      values = [
+        data["年月日"] || "",
+        data["会社名"] || "",
+        data["合計税込金額"]  || "",
+        data["10%税込対象額"] || "",
+        data["10%税抜対象額"] || "",
+        data["10%税額"] || "",
+        data["8%税込対象額"] || "",
+        data["8%税抜対象額"] || "",
+        data["8%税額"] || "",
+        data["インボイス"] || "",
+        err || "",
+        fileName || "",
+        fileId || "",
+        url || ""
+      ];
+    }catch(e){
+      Logger.log('log err '+ e)
+
+
+    }
+
+    Logger.log('[values] ' + values)
+    sheet.getRange(nextRow, 1, 1, values.length).setValues([values]);
+    //console.log("スプレッドシートにデータを書き込みました");
+    return 0;
+  } catch (e) {
+    Logger.log('err[values] ' + [values])
+    sheet.getRange(nextRow, 1, 1, values.length).setValues([values]);
+    //console.error(`スプレッドシートへの書き込みに失敗しました: ${e}`);
+    return e;
+  }
+}
+
+
+function main() {
+  // 開始時刻を記録
+  const startTime = new Date();
+
+  // 環境変数を取得
+  getEnvDataArray();
+
+  // resultシートを取得
+  const resultSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('result');
+  
+  // resultシートに画面を移動
+  SpreadsheetApp.getActiveSpreadsheet().setActiveSheet(resultSheet);
+
+  // resultシートのA2を修正
+  updateImportRangeURL()
+
+  clearResultSheet();
+   // トースト通知：処理開始
+   SpreadsheetApp.getActiveSpreadsheet().toast("処理を開始します", "通知", 3);
+
+  const FileIdAndUrls = getFileIdAndUrls();
+  Logger.log('fileId ' + FileIdAndUrls[0]);
+
+  const googleDriveFileIds =FileIdAndUrls[0]//getUrlsFromSpreadsheet();
+
+  const documentType = "image"; // ファイルタイプを指定してください。例：TXT, PDF, DOCX
+
+  console.log("googleDriveFileIds:", googleDriveFileIds); // 配列の内容をログに出力
+
+  console.log("main 関数が実行されました"); // main 関数が実行されたことをログに出力
+
+  for(let i = 0 ; i < FileIdAndUrls[0].length ; i++){
+    let fileId        = FileIdAndUrls[0][i];
+    let url           = FileIdAndUrls[1][i];
+    let fileExtension = FileIdAndUrls[2][i];
+    let fileName      = FileIdAndUrls[3][i];
+    
+    
+    const uploadedFileId = uploadFileFromGoogleDrive(fileId, fileExtension);
+    if (uploadedFileId) {
+      Logger.log('----------------------------------------------------------')
+      Logger.log(`(${i+1}/${FileIdAndUrls[0].length})`+' [1/5]Difyファイルアップロードが成功しました '+ uploadedFileId)
+      // ワークフローのパラメータ情報を取得
+      const parameters = getWorkflowParameters();
+      if (parameters) {
+        Logger.log(`(${i+1}/${FileIdAndUrls[0].length})`+' [2/5]Difyパラメータ取得が成功しました ' )
+        // ワークフローを実行
+
+        const result = runWorkflow(uploadedFileId, parameters, documentType);
+        console.log(result);
+        if (result && result.status !== "error" && result.data && result.data.outputs && result.data.outputs.text) {
+          try {
+            Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + " [3/5]Difyワークフロー実行が成功しました")
+            const text = result.data.outputs.text;
+            //const jsonString = text.replace(/^```json\n/, '').replace(/\n```$/, '');
+            const jsonString = text.replace(/^```json\n/, '').replace(/\n```$/, '').replace(/\n```\n$/, '');
+            const answer = JSON.parse(jsonString);
+            Logger.log(jsonString)
+            Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + " [4/5]JSONパースが成功しました");
+            let invoice = answer['インボイス'];
+            if (invoice && !/^T\d{13}$/.test(invoice)) {
+              answer['インボイス'] = "";
+            }
+            Logger.log("answer['インボイス']= " +  answer['インボイス'])
+            let res = writeToSpreadsheet(answer,fileId,url,fileName);
+            if(res == 0){
+              Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + " [5/5]スプレッドシート書き込みが成功しました");
+            }else{
+              Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + res );
+            }
+            // トースト通知：ワークフロー実行
+            SpreadsheetApp.getActiveSpreadsheet().toast("Difyワークフロー：実行ログ",`(${i+1}/${FileIdAndUrls[0].length})`+"実行中", 1);
+
+
+          } catch (e) {
+            let err = 'JSONパースが失敗しました';
+            let res = writeToSpreadsheet(err,fileId,url,fileName);
+            if(res == 0){
+              Logger.log(`(${i+1}/${FileIdAndUrls[0].length})`+" スプレッドシートにデータを書き込みました");
+            }else{
+              Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + res );
+            }
+            console.error(`JSONパースに失敗しました: ${e}`);
+             // トースト通知：JSONパースエラー
+             SpreadsheetApp.getActiveSpreadsheet().toast(`(${i+1}/${FileIdAndUrls[0].length})JSONパースに失敗しました : ${e}`, "エラー", 5);
+          }
+        }else{
+          let err = 'Difyワークフローが失敗しました';
+          let res = writeToSpreadsheet(err,fileId,url,fileName);
+          if(res == 0){
+            Logger.log(`(${i+1}/${FileIdAndUrls[0].length})`+"スプレッドシートにデータを書き込みました");
+          }else{
+            Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + res );
+          }
+
+          // トースト通知：ワークフローエラー
+          SpreadsheetApp.getActiveSpreadsheet().toast(`(${i+1}/${FileIdAndUrls[0].length}) Difyワークフローエラーが発生しました: ${err}`, "エラー", 5);
+
+        }
+      } else {
+        err = 'Difyパラメータ取得が失敗しました';
+        let res = writeToSpreadsheet(err,fileId,url,fileName);
+        if(res == 0){
+          Logger.log(`(${i+1}/${FileIdAndUrls[0].length})`+"スプレッドシートにデータを書き込みました");
+        }else{
+          Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + res );
+        }
+
+         // トースト通知：パラメータエラー
+        SpreadsheetApp.getActiveSpreadsheet().toast(`(${i+1}/${FileIdAndUrls[0].length})Difyパラメータ取得に失敗しました : `, "エラー", 5);
+        console.error("Difyワークフローのパラメータ情報の取得に失敗し、ワークフローを実行できません");
+      }
+    } else {
+      let err = 'Difyファイルアップロードが失敗しました';
+      let res = writeToSpreadsheet(err,fileId,url,fileName);
+      if(res == 0){
+        Logger.log(`(${i+1}/${FileIdAndUrls[0].length})`+"スプレッドシートにデータを書き込みました");
+      }else{
+        Logger.log(`(${i+1}/${FileIdAndUrls[0].length})` + res );
+      }
+
+       // トースト通知：アップロードエラー
+      SpreadsheetApp.getActiveSpreadsheet().toast(`(${i+1}/${FileIdAndUrls[0].length})Difyへのファイルのアップロードに失敗しました `, "エラー", 5);
+      console.error("ファイルのアップロードに失敗し、ワークフローを実行できません");
+    }
+
+
+  }
+    // トースト通知：処理完了
+    //SpreadsheetApp.getActiveSpreadsheet().toast("処理が完了しました", "通知", 5);
+
+    // 終了時刻を記録
+    const endTime = new Date();
+
+    // 経過時間を計算 (秒単位)
+    const elapsedTime = (endTime.getTime() - startTime.getTime()) / 1000;
+
+    resultSheet.getRange('D3').setValue(elapsedTime.toFixed(2) + "秒");
+
+    // トースト通知：処理完了
+    SpreadsheetApp.getActiveSpreadsheet().toast(`処理が完了しました (${elapsedTime.toFixed(2)}秒かかりました)`, "通知", 5);
+}
+
