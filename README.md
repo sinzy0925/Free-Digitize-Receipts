@@ -1,4 +1,10 @@
 # Free-Digitize-Receipts
+## これは、Dify＋Googleスプレッドシート＋Googleドライブ＋GASで作成したアプリです。
+-  DifyのDSLファイルは、Dify_DSLにあります
+-  Googleスプレッドシートはこちら　https://docs.google.com/spreadsheets/d/1x257I5x45m4vh2q8SmPr9MULoCCMgmcm6UdFgpo9Cvg/edit?usp=sharing
+-  GASアプリは、Google_Apps_Scriptにあります。
+-  動画の説明はこちら　
+
 領収書を無料でデジタル化しよう！
 
 この作業をするとこうなります。
